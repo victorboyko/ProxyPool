@@ -10,6 +10,7 @@ import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.io.PushbackInputStream;
 import java.io.StringReader;
+import java.math.BigInteger;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.ServerSocket;
@@ -24,14 +25,17 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Random;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+
 import java.util.Map.Entry;
 
 
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang.ArrayUtils;
 import org.apache.commons.lang.builder.ToStringBuilder;
 import org.apache.log4j.Logger;
 import org.json.simple.JSONArray;
@@ -47,37 +51,31 @@ public class Main {
 		System.exit(-121);
 	}
 	
-	
-	private static double feePercentage; // in percent, obviously
-	private static double feePeriod; // in seconds
-	private static Coin feeCoin;
-	
-	private static Set<String> coinsLimit;
 	private static double updateCoinsTime;
 	private static int poolPort;
-	private static String extPool;
-	
+	private static Map<String, Coin> coinMap;
+
 	private static Properties props = new Properties();
 
-	private static void readProperties() {
+	private static void readProperties() throws ParseException {
 		try {
 			String propStr = FileUtils.readFileToString(new File("pool.properties"));
 			props.load(new StringReader(propStr.replace("\\","\\\\")));
 		} catch (FileNotFoundException e) {
-			logger.error("no switcher.properties found");
+			logger.error("no pool.properties found");
 			exit();
 		} catch (IOException e) {
 			logger.error("error reading properties: " + e);
 			exit();
 		}
+		String extpools = props.getProperty("extpools").trim();
+		coinMap = Collections.synchronizedMap(Coin.parse(extpools));
+		if (coinMap == null) {
+			logger.error(ParseException.ERROR_UNEXPECTED_TOKEN);
+			throw new ParseException(ParseException.ERROR_UNEXPECTED_TOKEN);
+		}
 		updateCoinsTime = Double.valueOf(props.getProperty("minehub.update.frequency").trim());		
-		feePercentage = Double.valueOf(props.getProperty("fee.percentage").trim());
-		feePeriod = Double.valueOf(props.getProperty("fee.period").trim());
-		String feePool = props.getProperty("fee.pool").trim();
-		feeCoin = Coin.parse(feePool).values().iterator().next();
-		coinsLimit = new HashSet<>(Arrays.asList(props.getProperty("active.coins").trim().split(",")));
 		poolPort = Integer.valueOf(props.getProperty("pool.port").trim());
-		extPool = props.getProperty("ext.pool").trim();
 	}
 	
 	private static String getStringByURL(URL jsonURL) throws IOException {
@@ -120,7 +118,7 @@ public class Main {
 		String coinAbr, host, login, password;
 		int port;
 		
-		private static Map<String, Coin> parse(String str) {
+		public static Map<String, Coin> parse(String str) {
 			Map<String, Coin> coins = new HashMap<>();
 			String[] coinTexts = str.split(","); // ZEC=user:password@host:port,ZEN=user:password@host:port
 			for(String coinText : coinTexts) {
@@ -149,6 +147,16 @@ public class Main {
 		@Override
 		public String toString() {
 			return ToStringBuilder.reflectionToString(this);
+		}
+		
+		public Coin clone() {
+			Coin c = new Coin();
+			c.coinAbr = Coin.this.coinAbr;
+			c.host = Coin.this.host;
+			c.login = Coin.this.login;
+			c.password = Coin.this.password;
+			c.port = Coin.this.port;
+			return c;
 		}
 	}
 	
@@ -180,8 +188,8 @@ public class Main {
 
 		String lineRemote = inRemote.readLine();
 		logger.debug("switchpool<-pool" + lineRemote);
-//		JSONObject rootJsonRemote = (JSONObject)new JSONParser().parse(lineRemote);
-//		String extranonce1 = ((JSONArray)rootJsonRemote.get("result")).get(1).toString();
+		JSONObject rootJsonRemote = (JSONObject)new JSONParser().parse(lineRemote);
+		String extranonce1 = ((JSONArray)rootJsonRemote.get("result")).get(1).toString();
 		
 		String authoriseMessageRem = String.format("{\"id\":2,\"method\":\"mining.authorize\",\"params\":[\"%s\",\"%s\"]}", newCoin.login, newCoin.password);
 		logger.debug("switchpool->pool" + authoriseMessageRem);
@@ -193,10 +201,10 @@ public class Main {
 //		minerPw.println(lineRemote);
 //		minerPw.flush();
 		
-//		String setExtranonceMessage = String.format("{\"method\":\"mining.set_extranonce\",\"id\":3,\"params\":[\"%s\", null]}", extranonce1);
-//		logger.debug("miner<-...<-pool" + setExtranonceMessage);
-//		minerPw.println(setExtranonceMessage);
-//		minerPw.flush();
+		String setExtranonceMessage = String.format("{\"method\":\"mining.set_extranonce\",\"id\":3,\"params\":[\"%s\", null]}", extranonce1);
+		logger.debug("miner<-switchpool" + setExtranonceMessage);
+		minerPw.println(setExtranonceMessage);
+		minerPw.flush();
 		
 		new Thread(() -> {
 			String lineRemote2 = null;
@@ -231,18 +239,15 @@ public class Main {
 		PrintWriter pw = new PrintWriter(clientSocket.getOutputStream());
 		StringBuilder sb = new StringBuilder();
 		JSONParser parser = new JSONParser();
-		String line;
-		Coin currentCoin = null;
 		long startTime, currentTime, feePeriodStartTime, lastKeepingShareTime;
 		startTime = currentTime = feePeriodStartTime = lastKeepingShareTime = System.currentTimeMillis();
 		long feeTime = 0;
 		
-		String loginStr = extPool + ",ZCL=nhRig1:x@127.0.0.1:3034,HUSH=nhRig1:x@127.0.0.1:3033";
-		Map<String, Coin> coinMap = Coin.parse(loginStr);
-		if (coinMap == null) {
-			logger.error(ParseException.ERROR_UNEXPECTED_TOKEN);
-			throw new ParseException(ParseException.ERROR_UNEXPECTED_TOKEN);
+		Map<String, Coin> coinMap = new HashMap<>();
+		for(Entry<String, Coin> entry : Main.coinMap.entrySet()) {
+			coinMap.put(entry.getKey(), entry.getValue().clone());
 		}
+		
 		minerCoins.set(coinMap);
 		Set<String> mainCoinAbrs = new HashSet<>();
 		synchronized (Main.coins) {
@@ -254,13 +259,9 @@ public class Main {
 		String message = "Coins supported: " + minerCoins.get().keySet();
 		logger.debug(message);
 		
-		final Coin mainCoin = currentCoin = coinMap.get(extPool.substring(0, 3));		
-		if (!mainCoinAbrs.contains(mainCoin.coinAbr)) {
-			logger.error(String.format("Main coin %s is not supported by pool", mainCoin.coinAbr));
-			return;
-		}
+		Coin currentCoin = minerCoins.get().values().iterator().next();		
+
 		Socket socketRemote = new Socket(currentCoin.host, currentCoin.port);
-		PrintWriter mainCoinRemoteSocketPw = new PrintWriter(socketRemote.getOutputStream());
 		class Wrapper<T> { // synchronized
 			private T t;
 			public Wrapper(T t) {
@@ -277,12 +278,11 @@ public class Main {
 				return t.toString();
 			}
 		}
-		Wrapper<PrintWriter> remoteSocketPw = new Wrapper(mainCoinRemoteSocketPw);
+		Wrapper<PrintWriter> remoteSocketPw = new Wrapper(new PrintWriter(socketRemote.getOutputStream()));
 		BufferedReader inRemote = new BufferedReader(new InputStreamReader(socketRemote.getInputStream()));
-		Wrapper<String> lastTarget = new Wrapper<>("");
-		Wrapper<String> lastNotify = new Wrapper<>("");
 		
 		try {
+		String line;
 		while((line = in.readLine())!=null) {
 				long timeInterval = System.currentTimeMillis() - currentTime;
 				currentTime = System.currentTimeMillis();				
@@ -292,113 +292,79 @@ public class Main {
 				String id = json.get("id").toString();
 				String method = json.get("method").toString();
 				if ("mining.subscribe".equalsIgnoreCase(method)) {					
+					final Random rnd = new Random();
+					String extranonceGenerated = BigInteger.valueOf(rnd.nextInt(1<<(3*8+5))).toString(16);
+					extranonceGenerated = "0000000000".substring(extranonceGenerated.length()) + extranonceGenerated;						
+					((JSONArray)json.get("params")).set(0, extranonceGenerated);
+					
 					if (((JSONArray)json.get("params")).size() == 4) {
 						((JSONArray)json.get("params")).set(2, currentCoin.host);
 						((JSONArray)json.get("params")).set(3, currentCoin.port);
-						line = json.toString();
-					}					
-					logger.debug("miner->...->pool" + line);
+					}
+					line = json.toString();
+					logger.debug("switchpool->pool" + line);
 					remoteSocketPw.get().println(line);
 					remoteSocketPw.get().flush();
 					String resp = inRemote.readLine();
-					JSONObject rootJsonRemote = (JSONObject)new JSONParser().parse(resp);
-					String extranonce1 = ((JSONArray)rootJsonRemote.get("result")).get(1).toString();
+					logger.debug("switchpool<-pool" + resp);
+					JSONObject rootJsonRemote = (JSONObject)parser.parse(resp);
+					JSONArray result = ((JSONArray)rootJsonRemote.get("result"));
+					String extranonce1 = result.get(1).toString();
 					Main.extranonce1.set(extranonce1);
-					logger.debug("miner<-...<-pool" + resp);
+					logger.debug("miner<-switchpool" + resp);
 					pw.println(resp);
 					pw.flush();
 					
 					new Thread(()->{
+						JSONParser parser2 = new JSONParser();
 						String lineRemote2 = null;
 						try {
 							while ((lineRemote2 = inRemote.readLine()) != null) {
-								JSONObject respJson = (JSONObject)parser.parse(lineRemote2);
-								Object method2 = respJson.get("method");
-								if (method2 != null && "mining.notify".equalsIgnoreCase(method2.toString())) {
-									lastNotify.set(lineRemote2);
-								}
-								if (method2 != null && "mining.set_target".equalsIgnoreCase(method2.toString())) {
-									lastTarget.set(lineRemote2);
-								}
-								boolean isMainCoin = remoteSocketPw.get() == mainCoinRemoteSocketPw;								
-								if (isMainCoin || method2 == null) {
-									logger.debug("miner<-...<-pool" + lineRemote2);
-									pw.println(lineRemote2);
-									pw.flush();
-								} else {
-									logger.debug("(null)<-...<-pool" + lineRemote2);
-									//TODO return confirmations on accepted shares
-								}
+
+//								logger.debug("switchpool<-pool" + lineRemote2);
+//								JSONObject json2 = (JSONObject)parser2.parse(lineRemote2);
+//								Object id2 = json2.get("id");
+//								if (id2 != null && "1".equals(id2.toString())) {
+//									JSONArray result2 = ((JSONArray)json.get("result"));
+//									if (result2.size() > 1) {
+//										result2.set(0, result2.get(1));
+//										lineRemote2 = json2.toString();
+//									}
+//								}
+								
+								logger.debug("miner<-...<-switchpool" + lineRemote2);
+								pw.println(lineRemote2);
+								pw.flush();								
 													
 							}
 							
 						} catch (IOException e) {
-							logger.error("Main currency connection error: " + e);
-						} catch (ParseException e) {
-							logger.error("Error parsing message: " + lineRemote2);
-							try { socketRemote.close();} catch (IOException e1) {}
-							pw.close();
-						}
-					}).start();
-
-					new Thread(()->{
-						boolean wasMainCoin = true;
-						while (true) {
-							try { Thread.sleep(50); } catch (InterruptedException e) {}
-							boolean isMainCoin = remoteSocketPw.get() == mainCoinRemoteSocketPw;
-							if (isMainCoin && !wasMainCoin) {
-								logger.info("sending stored 'mining.set_target' and 'mining.notify' messaged to miner");
-								logger.debug("miner<-proxypool: " + lastTarget.get());
-								pw.println(lastTarget.get());
-								pw.flush();
-								logger.debug("miner<-proxypool: " + lastNotify.get());
-								pw.println(lastNotify.get());
-								pw.flush();
-							}
-							wasMainCoin = isMainCoin;
-						}
+							logger.debug("Pool connection closed, possibly because of a currency switch: " + e);
+						} 
+//						catch (ParseException e) {
+//							logger.error("Error parsing message: " + lineRemote2);
+//							try { socketRemote.close();} catch (IOException e1) {}
+//							pw.close();
+//						}
 					}).start();
 					
 					continue;
 				}			
 				if("mining.authorize".equalsIgnoreCase(method)) {
 					JSONArray params = (JSONArray)json.get("params");
-					((JSONArray)json.get("params")).set(0, currentCoin.login);
-					((JSONArray)json.get("params")).set(1, currentCoin.password);
-					line = json.toString();
-					
-//					String login = params.get(0).toString();
-//					Map<String, Coin> coinMap = Coin.parse(login);
-//					if (coinMap == null) {
-//						throw new ParseException(ParseException.ERROR_UNEXPECTED_TOKEN);
-//					}
-//					minerCoins.set(coinMap);
-//					
-//					Set<String> mainCoinAbrs = new HashSet<>();
-//					synchronized (Main2.coins) {
-//						for(CoinWithProfit pair : Main2.coins.keySet()) {
-//							mainCoinAbrs.add(pair.coinAbr);
-//						}
-//					}
-//					minerCoins.get().keySet().retainAll(mainCoinAbrs);
-//					String message = "Coins supported: " + minerCoins.get().keySet();
-//					logger.debug(message);
-////					String jsonMessage = String.format("{\"method\":\"client.show_message\",\"params\":[\"%s\", null]}", message);
-////					pw.println(jsonMessage);
-////					pw.flush();
-//					
-//					synchronized (Main2.coins) {
-//						currentCoin = minerCoins.get().get(getCurrentCoin());
-//					}
-//					if (currentCoin == null) throw new IOException("no requested coins supported");
-//					switchToCoin(currentCoin, pw);
-//
-//					continue;
+					String login = params.get(0).toString();
+					for(Coin coin : minerCoins.get().values()) {
+						coin.login = coin.login.replaceAll("LOGIN", login);
+					}
+//					((JSONArray)json.get("params")).set(0, currentCoin.login);
+//					((JSONArray)json.get("params")).set(1, currentCoin.password);
+//					line = json.toString();
 				}
 				if("mining.submit".equalsIgnoreCase(method)) {
 					if (currentCoin == null) throw new IOException("Forcing disconnect due to wrong internal state");					
 					((JSONArray)json.get("params")).set(0, currentCoin.login);
 					line = json.toString();
+					logger.info(String.format("Share found!  (%s)  %s", clientSocket.getInetAddress(), currentCoin.login));
 				}
 				
 				logger.debug("miner->...->pool" + line);
@@ -408,70 +374,20 @@ public class Main {
 				} else {
 					logger.error("Somehow remotePw was not initialized and we're going to loose the message: " + line);
 				}
-				
-				
+								
 				if("mining.submit".equalsIgnoreCase(method)) {
 					
-					if (currentCoin == feeCoin) {
-						feeTime += timeInterval;
-						if (currentTime - feePeriodStartTime < feePeriod * 1000) {
-							continue;
-						}
-					}
-					if (currentCoin == mainCoin) {
-						lastKeepingShareTime = currentTime;
-					}
-					double actualFeePart = (double)feeTime / (currentTime - startTime);
-					double requiredFeePart = feePercentage / 100d;
-										
-//					logger.debug(String.format("(%2.7f)-(%2.7f) ; (%2.7f)-(%2.7f)", 
-//							Math.random() * (currentTime - startTime), 0.5 * feePeriod * 1000 / requiredFeePart,
-//							requiredFeePart, actualFeePart));
-					
-					String newCoin;					
-					if (requiredFeePart > actualFeePart && Math.random() * (currentTime - startTime) > 0.5 * feePeriod * 1000 / requiredFeePart) {
-						newCoin = feeCoin.coinAbr;
-					} else {
-						newCoin = getCurrentCoin();						
-//						newCoin = "ZEN";
-//						if (currentCoin.coinAbr.equalsIgnoreCase("ZEN")) {
-//							newCoin = "ZCL";
-//						}
-//						if (currentCoin.coinAbr.equalsIgnoreCase("HUSH")) {
-//							newCoin = "ZEN";
-//						}
-//						if (currentCoin.coinAbr.equalsIgnoreCase("ZCL")) {
-//							newCoin = "HUSH";
-//						}
-						
-					}
-					if (currentTime - lastKeepingShareTime > 4 * 60 * 1000) {
-						newCoin = mainCoin.coinAbr;
-					}
-					
+					String newCoin = getCurrentCoin();
 					
 					if (!currentCoin.coinAbr.equalsIgnoreCase(newCoin)) {
-						
-						if (currentCoin != mainCoin) {
-							remoteSocketPw.get().close();
-						}
+
+						remoteSocketPw.get().close();
 						
 						logger.debug(String.format("Switching coins! %s to %s", currentCoin.coinAbr, newCoin));
-						if (feeCoin.coinAbr == newCoin) {
-							currentCoin = feeCoin;
-							feePeriodStartTime = currentTime;
-							logger.info("Kicking off fee mining for " + clientSocket.getInetAddress());
-						} else {
-							synchronized (Main.coins) {
-								currentCoin = minerCoins.get().get(newCoin);
-							}
+						synchronized (Main.coins) {
+							currentCoin = minerCoins.get().get(newCoin);
 						}
-
-						if (currentCoin == mainCoin) {
-							remoteSocketPw.set(mainCoinRemoteSocketPw);
-						} else {
-							remoteSocketPw.set( switchToCoin(currentCoin, pw) );
-						}
+						remoteSocketPw.set( switchToCoin(currentCoin, pw) );
 					}
 				}
 						
@@ -502,6 +418,9 @@ public class Main {
 						processSocketConnection(s);
 					} catch (IOException | ParseException e2) {
 						logger.info(String.format("miner (%s) connection error (he might have shut it down): %s", s.getInetAddress(),  e2));
+					} catch (Exception e) {
+						logger.error(String.format("miner (%s) unexpected error during processing connection: %s %s", s.getInetAddress(), 
+								e, ArrayUtils.toString(e.getStackTrace())));
 					}
 				}).start();
 			}
@@ -536,9 +455,6 @@ public class Main {
 		for (Object coinWrap : topJson.entrySet()) {
 			Entry<Object, Object> coinPairVals = (Entry<Object, Object>) coinWrap;
 			String coinAbr = (String) coinPairVals.getKey();
-			if (!coinsLimit.contains(coinAbr)) {
-				continue;
-			}
 			double profitability = Double.valueOf(((JSONArray)(coinPairVals.getValue())).get(0).toString().trim());
 			coinsNew.put(coinAbr, new CoinWithProfit(coinAbr, profitability));
 		}
@@ -574,7 +490,7 @@ public class Main {
 				try {
 					try {
 						updateCoinsListOnce();
-						logger.debug(coins);
+//						logger.debug(coins); // too much logs
 					} catch (IOException | ParseException e) {
 						logger.error("Error reading coins info from MineHub :" + e);
 					}
@@ -593,8 +509,13 @@ public class Main {
 	}
 	
 	public static void main(String[] args) {
-		logger.info("Proxy Pool for NH v0.1!");
-		readProperties();
+		logger.info("Proxy Pool v0.3 (no NiceHash support)!");
+		try {
+			readProperties();
+		} catch (ParseException e) {
+			logger.fatal("Error parsing properties: " + e);
+			exit();
+		}
 		updateCoinsList();
 
 		handleConnections();

@@ -18,4 +18,5 @@ public class CoinWithProfit {
 	public String toString() {
 		return String.format("[%s,%4.2f]", coinAbr, profitability);
 	}
+	
 }
