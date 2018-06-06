@@ -54,7 +54,8 @@ public class Main {
 	private static double updateCoinsTime;
 	private static int poolPort;
 	private static Map<String, Coin> coinMap;
-
+	private static boolean isForNicehash;
+	
 	private static Properties props = new Properties();
 
 	private static void readProperties() throws ParseException {
@@ -74,6 +75,7 @@ public class Main {
 			logger.error(ParseException.ERROR_UNEXPECTED_TOKEN);
 			throw new ParseException(ParseException.ERROR_UNEXPECTED_TOKEN);
 		}
+		isForNicehash = Boolean.getBoolean(props.getProperty("is.for.nicehash").trim());		
 		updateCoinsTime = Double.valueOf(props.getProperty("minehub.update.frequency").trim());		
 		poolPort = Integer.valueOf(props.getProperty("pool.port").trim());
 	}
@@ -188,9 +190,11 @@ public class Main {
 
 		String lineRemote = inRemote.readLine();
 		logger.debug("switchpool<-pool" + lineRemote);
-		JSONObject rootJsonRemote = (JSONObject)new JSONParser().parse(lineRemote);
-		String extranonce1 = ((JSONArray)rootJsonRemote.get("result")).get(1).toString();
-		
+		String extranonce1 = null;
+		if (!isForNicehash) {
+			JSONObject rootJsonRemote = (JSONObject)new JSONParser().parse(lineRemote);
+			extranonce1 = ((JSONArray)rootJsonRemote.get("result")).get(1).toString();
+		}
 		String authoriseMessageRem = String.format("{\"id\":2,\"method\":\"mining.authorize\",\"params\":[\"%s\",\"%s\"]}", newCoin.login, newCoin.password);
 		logger.debug("switchpool->pool" + authoriseMessageRem);
 		pwRemote.println(authoriseMessageRem);
@@ -200,11 +204,12 @@ public class Main {
 //		logger.debug("switchpool<-pool" + lineRemote);
 //		minerPw.println(lineRemote);
 //		minerPw.flush();
-		
-		String setExtranonceMessage = String.format("{\"method\":\"mining.set_extranonce\",\"id\":3,\"params\":[\"%s\", null]}", extranonce1);
-		logger.debug("miner<-switchpool" + setExtranonceMessage);
-		minerPw.println(setExtranonceMessage);
-		minerPw.flush();
+		if (!isForNicehash) {		
+			String setExtranonceMessage = String.format("{\"method\":\"mining.set_extranonce\",\"id\":3,\"params\":[\"%s\", null]}", extranonce1);
+			logger.debug("miner<-switchpool" + setExtranonceMessage);
+			minerPw.println(setExtranonceMessage);
+			minerPw.flush();
+		}
 		
 		new Thread(() -> {
 			String lineRemote2 = null;
@@ -509,7 +514,7 @@ public class Main {
 	}
 	
 	public static void main(String[] args) {
-		logger.info("Proxy Pool v0.3 (no NiceHash support)!");
+		logger.info(String.format("Proxy Pool v0.3 (%s)!", isForNicehash ? "NH enabled" : "NH disabled"));
 		try {
 			readProperties();
 		} catch (ParseException e) {
