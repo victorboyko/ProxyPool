@@ -103,7 +103,7 @@ public class StatisticsServer {
 					
 					long delta = (to.getTime() - from.getTime()) / colsNum;
 					
-					for(int i = 0; i < colsNum+1; i++) {
+					for(int i = 0; i < colsNum; i++) {
 						String labelText = i % 5 == 0 ? df.format(new Date(from.getTime() + i*delta)) : ".";
 						labels.add("\"" + labelText  + "\"");
 						double portion = 0d;						

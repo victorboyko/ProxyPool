@@ -368,9 +368,9 @@ public class Main {
 					for(Coin coin : minerCoins.get().values()) {
 						coin.login = coin.login.replaceAll("LOGIN", login);
 					}
-//					((JSONArray)json.get("params")).set(0, currentCoin.login);
-//					((JSONArray)json.get("params")).set(1, currentCoin.password);
-//					line = json.toString();
+					params.set(0, currentCoin.login);
+					params.set(1, currentCoin.password);
+					line = json.toString();
 				}
 				
 				if("mining.submit".equalsIgnoreCase(method)) {
