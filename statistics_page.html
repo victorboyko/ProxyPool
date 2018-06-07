@@ -1,0 +1,98 @@
+<html>
+  <head>
+    <title>ProxyPool statistics</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/2.4.0/Chart.min.js"></script>
+  </head>
+  <body>
+	<h2>ProxyPool statistics</h2>
+  <form method="get" action="/stat">
+  <table>
+    <col width="1100">
+    <col width="10">
+    <tr>
+      <td><a href="/stat?period=0.083333">Get statistics last 5m</a></td>	
+    </tr>
+    
+    <tr>
+      <td>
+	<a href="/stat?period=1">Get statistics last 1h</a>
+      </td>	
+      <td align="right">From:</td>
+      <td>
+	<input name="from" type="datetime-local" value="%s">
+      </td>	
+    </tr>
+    <tr>
+      <td>
+	<a href="/stat">Get statistics last 24h</a>
+      </td>	
+      <td align="right">To:</td>
+      <td>
+	<input name="to" type="datetime-local" value="%s"> &nbsp;&nbsp;&nbsp; <input id="sub2" type="submit" value="Get statistics for interval">
+      </td>	
+    </tr>
+    <tr>
+      <td>
+		  <canvas id="myChart"></canvas>
+      </td>
+      <td></td>
+    </tr>
+  </table>
+  </form>
+  <br/>
+  <b>Total solutions: <font color="blue">%.1f</font></b> MSol
+  <br/>
+  <b>Average speed: <font color="green">%.1f</font></b> Sol/s
+<script>
+var ctx = document.getElementById("myChart").getContext('2d');
+</script>                     
+<script>
+/*
+var chart = new Chart(ctx, {
+    // The type of chart we want to create
+    type: 'line',
+
+    // The data for our dataset
+    data: {
+        labels: ["January", "February", "March", "April", "May", "June", "July"],
+        datasets: [{
+            label: "My First dataset",
+            backgroundColor: 'rgb(255, 99, 132)',
+            borderColor: 'rgb(255, 99, 132)',
+            data: [0, 10, 5, 2, 20, 30, 45],
+        }]
+    },
+
+    // Configuration options go here
+    options: {}
+});
+*/
+
+
+var myChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+        labels: %s,
+        datasets: [{
+            label: 'normalized shares ( =solutions)',
+        	backgroundColor: 'rgba(54, 162, 235, 0.2)',
+            borderColor: 'rgba(54, 162, 235, 1)',
+            data: %s,
+            borderWidth: 1
+        }]
+    },
+    options: {
+    	scales: {
+            yAxes: [{
+                ticks: {
+                    beginAtZero:true
+                }
+            }]
+        }
+    }
+});
+
+
+</script>	
+  </body>
+</html>

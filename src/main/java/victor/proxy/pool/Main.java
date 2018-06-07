@@ -10,7 +10,9 @@ import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.io.PushbackInputStream;
 import java.io.StringReader;
+import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.math.RoundingMode;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.ServerSocket;
@@ -20,6 +22,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -47,12 +50,13 @@ public class Main {
 	
 	private static final Logger logger = Logger.getLogger(Main.class);
 	
-	private static void exit() {
+	static void exit() {
 		System.exit(-121);
 	}
 	
 	private static double updateCoinsTime;
 	private static int poolPort;
+			static int httpPort;
 	private static Map<String, Coin> coinMap;
 	private static boolean isForNicehash;
 	
@@ -75,9 +79,10 @@ public class Main {
 			logger.error(ParseException.ERROR_UNEXPECTED_TOKEN);
 			throw new ParseException(ParseException.ERROR_UNEXPECTED_TOKEN);
 		}
-		isForNicehash = Boolean.getBoolean(props.getProperty("is.for.nicehash").trim());		
+		isForNicehash = Boolean.parseBoolean(props.getProperty("is.for.nicehash").trim());		
 		updateCoinsTime = Double.valueOf(props.getProperty("minehub.update.frequency").trim());		
 		poolPort = Integer.valueOf(props.getProperty("pool.port").trim());
+		httpPort = Integer.valueOf(props.getProperty("http.port").trim());
 	}
 	
 	private static String getStringByURL(URL jsonURL) throws IOException {
@@ -165,6 +170,7 @@ public class Main {
 	private static ThreadLocal<Map<String, Coin>> minerCoins = new ThreadLocal<>();
 	
 	private static ThreadLocal<String> extranonce1 = new ThreadLocal<>();
+
 	
 	private static String getCurrentCoin() {
 		synchronized (Main.coins) {
@@ -177,7 +183,7 @@ public class Main {
 		return null;
 	}
 	
-	private static PrintWriter switchToCoin(Coin newCoin, PrintWriter minerPw) throws ParseException, IOException {
+	private static PrintWriter switchToCoin(Coin newCoin, PrintWriter minerPw, Wrapper<String> target) throws ParseException, IOException {
 		
 		Socket socketRemote = new Socket(newCoin.host, newCoin.port);
 		PrintWriter pwRemote = new PrintWriter(socketRemote.getOutputStream());
@@ -222,22 +228,35 @@ public class Main {
 						logger.debug("(null)<-...<-pool" + lineRemote2);
 						continue;
 					}
+
+					Object methodObj = json.get("method");
+					String method = methodObj == null ? null : methodObj.toString();
+					
+					// repeated from original handler
+					if("mining.set_target".equalsIgnoreCase(method)) {
+						String targetStr = ((JSONArray)json.get("params")).get(0).toString();
+						target.set(targetStr);
+					}
+										
 					logger.debug("miner<-...<-pool" + lineRemote2);
 					minerPw.println(lineRemote2);
 					minerPw.flush();
 				}
-			} catch (IOException e) {
-				// TODO Do nothing??, PrintWriter must have been closed in
-				// other thread
 			} catch (ParseException e) {
-				logger.error("Error parsing message: " +lineRemote2);
+				logger.error("Error parsing message: " + lineRemote2);
 				try { socketRemote.close();} catch (IOException e1) {}
 				minerPw.close();
+			} catch (IOException e) {
+				logger.debug("Pool connection closed, possibly because of a currency switch: " + e);						 
+			} catch (Exception e) {
+				logger.error("Remote pool connection loop crashed: " + e);
 			}
 		}).start();
 		
 		return pwRemote;
 	}
+	
+	private final static BigDecimal maxTarget = new BigDecimal(BigInteger.ONE.shiftLeft(64*4).subtract(BigInteger.ONE)); // 2^(32*4)-1 , BigInteger is thread safe
 	
 	private static void processSocketConnection(final Socket clientSocket) throws IOException, ParseException {
 		BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
@@ -267,24 +286,10 @@ public class Main {
 		Coin currentCoin = minerCoins.get().values().iterator().next();		
 
 		Socket socketRemote = new Socket(currentCoin.host, currentCoin.port);
-		class Wrapper<T> { // synchronized
-			private T t;
-			public Wrapper(T t) {
-				this.t = t;
-			}
-			synchronized T get() {
-				return t;
-			}
-			synchronized void set(T t) {
-				this.t = t;
-			}
-			@Override
-			public String toString() {
-				return t.toString();
-			}
-		}
+
 		Wrapper<PrintWriter> remoteSocketPw = new Wrapper(new PrintWriter(socketRemote.getOutputStream()));
 		BufferedReader inRemote = new BufferedReader(new InputStreamReader(socketRemote.getInputStream()));
+		Wrapper<String> target = new Wrapper(null);
 		
 		try {
 		String line;
@@ -326,16 +331,17 @@ public class Main {
 						try {
 							while ((lineRemote2 = inRemote.readLine()) != null) {
 
-//								logger.debug("switchpool<-pool" + lineRemote2);
-//								JSONObject json2 = (JSONObject)parser2.parse(lineRemote2);
-//								Object id2 = json2.get("id");
-//								if (id2 != null && "1".equals(id2.toString())) {
-//									JSONArray result2 = ((JSONArray)json.get("result"));
-//									if (result2.size() > 1) {
-//										result2.set(0, result2.get(1));
-//										lineRemote2 = json2.toString();
-//									}
-//								}
+								JSONObject json2 = (JSONObject)parser2.parse(lineRemote2);
+								
+								Object method2Obj = json2.get("method");
+								String method2 = method2Obj == null ? null : method2Obj.toString();
+								
+								// repeat for switch coins
+								if("mining.set_target".equalsIgnoreCase(method2)) {
+									String targetStr = ((JSONArray)json2.get("params")).get(0).toString();
+									target.set(targetStr);
+									logger.debug("Setting target = " + target);
+								}
 								
 								logger.debug("miner<-...<-switchpool" + lineRemote2);
 								pw.println(lineRemote2);
@@ -343,14 +349,15 @@ public class Main {
 													
 							}
 							
+						} catch (ParseException e) {
+							logger.error("Error parsing message: " + lineRemote2);
+							try { socketRemote.close();} catch (IOException e1) {}
+							pw.close();
 						} catch (IOException e) {
-							logger.debug("Pool connection closed, possibly because of a currency switch: " + e);
-						} 
-//						catch (ParseException e) {
-//							logger.error("Error parsing message: " + lineRemote2);
-//							try { socketRemote.close();} catch (IOException e1) {}
-//							pw.close();
-//						}
+							logger.debug("Pool connection closed, possibly because of a currency switch: " + e);						 
+						} catch (Exception e) {
+							logger.error("Remote pool connection loop crashed: " + e);
+						}
 					}).start();
 					
 					continue;
@@ -365,13 +372,20 @@ public class Main {
 //					((JSONArray)json.get("params")).set(1, currentCoin.password);
 //					line = json.toString();
 				}
+				
 				if("mining.submit".equalsIgnoreCase(method)) {
 					if (currentCoin == null) throw new IOException("Forcing disconnect due to wrong internal state");					
 					((JSONArray)json.get("params")).set(0, currentCoin.login);
 					line = json.toString();
 					logger.info(String.format("Share found!  (%s)  %s", clientSocket.getInetAddress(), currentCoin.login));
+					
+					double diff = maxTarget.divide(new BigDecimal(new BigInteger(target.get(), 16)), 2, RoundingMode.HALF_UP).doubleValue();
+					Date date = new Date();
+					Main.statData.put(date, Main.statData.containsKey(date) ? Main.statData.get(date) + diff : diff);
 				}
-				
+
+
+			
 				logger.debug("miner->...->pool" + line);
 				if (remoteSocketPw.get() != null) {
 					remoteSocketPw.get().println(line);
@@ -392,7 +406,7 @@ public class Main {
 						synchronized (Main.coins) {
 							currentCoin = minerCoins.get().get(newCoin);
 						}
-						remoteSocketPw.set( switchToCoin(currentCoin, pw) );
+						remoteSocketPw.set( switchToCoin(currentCoin, pw, target) );
 					}
 				}
 						
@@ -513,15 +527,26 @@ public class Main {
 		}).start();
 	}
 	
+	final static Map<Date, Double> statData = Collections.synchronizedMap(new TreeMap<>());
+	
 	public static void main(String[] args) {
-		logger.info(String.format("Proxy Pool v0.3 (%s)!", isForNicehash ? "NH enabled" : "NH disabled"));
 		try {
 			readProperties();
 		} catch (ParseException e) {
 			logger.fatal("Error parsing properties: " + e);
 			exit();
 		}
+		logger.info(String.format("Proxy Pool v0.3 (%s)!", isForNicehash ? "NH enabled" : "NH disabled"));
 		updateCoinsList();
+		new Thread(()->{
+			try {
+				StatisticsServer.runStatistics(statData);				
+			} catch (IOException e) {
+				logger.fatal("Failed to start statistics server: " + e);
+				exit();
+			}			
+		}).start();
+
 
 		handleConnections();
 
