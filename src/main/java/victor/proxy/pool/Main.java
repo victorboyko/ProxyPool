@@ -290,6 +290,7 @@ public class Main {
 		Wrapper<PrintWriter> remoteSocketPw = new Wrapper(new PrintWriter(socketRemote.getOutputStream()));
 		BufferedReader inRemote = new BufferedReader(new InputStreamReader(socketRemote.getInputStream()));
 		Wrapper<String> target = new Wrapper(null);
+		String rigLogin = null;
 		
 		try {
 		String line;
@@ -364,9 +365,9 @@ public class Main {
 				}			
 				if("mining.authorize".equalsIgnoreCase(method)) {
 					JSONArray params = (JSONArray)json.get("params");
-					String login = params.get(0).toString();
+					rigLogin = params.get(0).toString();
 					for(Coin coin : minerCoins.get().values()) {
-						coin.login = coin.login.replaceAll("LOGIN", login);
+						coin.login = coin.login.replaceAll("LOGIN", rigLogin);
 					}
 					params.set(0, currentCoin.login);
 					params.set(1, currentCoin.password);
@@ -377,9 +378,12 @@ public class Main {
 					if (currentCoin == null) throw new IOException("Forcing disconnect due to wrong internal state");					
 					((JSONArray)json.get("params")).set(0, currentCoin.login);
 					line = json.toString();
-					logger.info(String.format("Share found!  (%s)  %s", clientSocket.getInetAddress(), currentCoin.login));
 					
 					double diff = maxTarget.divide(new BigDecimal(new BigInteger(target.get(), 16)), 2, RoundingMode.HALF_UP).doubleValue();
+					
+					logger.info(String.format("Share found!  (%s)  %s, diff: %.1f", clientSocket.getInetAddress(), rigLogin, diff));
+					
+
 					Date date = new Date();
 					Main.statData.put(date, Main.statData.containsKey(date) ? Main.statData.get(date) + diff : diff);
 				}
@@ -394,15 +398,14 @@ public class Main {
 					logger.error("Somehow remotePw was not initialized and we're going to loose the message: " + line);
 				}
 								
-				if("mining.submit".equalsIgnoreCase(method)) {
-					
+				{					
 					String newCoin = getCurrentCoin();
 					
 					if (!currentCoin.coinAbr.equalsIgnoreCase(newCoin)) {
 
 						remoteSocketPw.get().close();
 						
-						logger.debug(String.format("Switching coins! %s to %s", currentCoin.coinAbr, newCoin));
+						logger.info(String.format("Switching coins! %s to %s for %s", currentCoin.coinAbr, newCoin, rigLogin));
 						synchronized (Main.coins) {
 							currentCoin = minerCoins.get().get(newCoin);
 						}
