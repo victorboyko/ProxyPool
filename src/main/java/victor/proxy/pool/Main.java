@@ -167,15 +167,15 @@ public class Main {
 		}
 	}
 	
-	private static ThreadLocal<Map<String, Coin>> minerCoins = new ThreadLocal<>();
+//	private static ThreadLocal<Map<String, Coin>> minerCoins = new ThreadLocal<>();
 	
 	private static ThreadLocal<String> extranonce1 = new ThreadLocal<>();
 
 	
-	private static String getCurrentCoin() {
+	private static String getCurrentCoin(Map<String, Coin> minerCoins) {
 		synchronized (Main.coins) {
 			for(CoinWithProfit coin : coins.keySet()) {
-				if (minerCoins.get().containsKey(coin.coinAbr)) {
+				if (minerCoins.containsKey(coin.coinAbr)) {
 					return coin.coinAbr;
 				}
 			}
@@ -267,25 +267,24 @@ public class Main {
 		startTime = currentTime = feePeriodStartTime = lastKeepingShareTime = System.currentTimeMillis();
 		long feeTime = 0;
 		
-		Map<String, Coin> coinMap = new HashMap<>();
+		final Map<String, Coin> minerCoins = Collections.synchronizedMap(new HashMap<>());
 		for(Entry<String, Coin> entry : Main.coinMap.entrySet()) {
-			coinMap.put(entry.getKey(), entry.getValue().clone());
+			minerCoins.put(entry.getKey(), entry.getValue().clone());
 		}
 		
-		minerCoins.set(coinMap);
 		Set<String> mainCoinAbrs = new HashSet<>();
 		synchronized (Main.coins) {
 			for(CoinWithProfit pair : Main.coins.keySet()) {
 				mainCoinAbrs.add(pair.coinAbr);
 			}
 		}
-		minerCoins.get().keySet().retainAll(mainCoinAbrs);
-		String message = "Coins supported: " + minerCoins.get().keySet();
+		minerCoins.keySet().retainAll(mainCoinAbrs);
+		String message = "Coins supported: " + minerCoins.keySet();
 		logger.debug(message);
 		
-		Coin currentCoin = minerCoins.get().values().iterator().next();		
+		Wrapper<Coin> currentCoin = new Wrapper<>(minerCoins.values().iterator().next());		
 
-		Socket socketRemote = new Socket(currentCoin.host, currentCoin.port);
+		Socket socketRemote = new Socket(currentCoin.get().host, currentCoin.get().port);
 
 		Wrapper<PrintWriter> remoteSocketPw = new Wrapper(new PrintWriter(socketRemote.getOutputStream()));
 		BufferedReader inRemote = new BufferedReader(new InputStreamReader(socketRemote.getInputStream()));
@@ -309,8 +308,8 @@ public class Main {
 					((JSONArray)json.get("params")).set(0, extranonceGenerated);
 					
 					if (((JSONArray)json.get("params")).size() == 4) {
-						((JSONArray)json.get("params")).set(2, currentCoin.host);
-						((JSONArray)json.get("params")).set(3, currentCoin.port);
+						((JSONArray)json.get("params")).set(2, currentCoin.get().host);
+						((JSONArray)json.get("params")).set(3, currentCoin.get().port);
 					}
 					line = json.toString();
 					logger.debug("switchpool->pool" + line);
@@ -366,17 +365,44 @@ public class Main {
 				if("mining.authorize".equalsIgnoreCase(method)) {
 					JSONArray params = (JSONArray)json.get("params");
 					rigLogin = params.get(0).toString();
-					for(Coin coin : minerCoins.get().values()) {
+					for(Coin coin : minerCoins.values()) {
 						coin.login = coin.login.replaceAll("LOGIN", rigLogin);
 					}
-					params.set(0, currentCoin.login);
-					params.set(1, currentCoin.password);
+					params.set(0, currentCoin.get().login);
+					params.set(1, currentCoin.get().password);
 					line = json.toString();
+					
+					final String rigLoginFinal = rigLogin;
+					new Thread(()->{
+						while(true) {
+							try {
+								Thread.sleep(5000);
+								
+								String newCoin = getCurrentCoin(minerCoins);								
+								if (!currentCoin.get().coinAbr.equalsIgnoreCase(newCoin)) {
+									
+									remoteSocketPw.get().close();	
+									
+									logger.info(String.format("Switching coins! %s to %s for %s", currentCoin.get().coinAbr, newCoin, rigLoginFinal));
+									synchronized (Main.coins) {
+										currentCoin.set(minerCoins.get(newCoin));
+									}
+									remoteSocketPw.set( switchToCoin(currentCoin.get(), pw, target) );
+								}
+							} catch (Exception e) {
+								logger.error(String.format("miner (%s) experienced error during coin switch: %s %s", 
+										clientSocket.getRemoteSocketAddress().toString(), 
+										e, ArrayUtils.toString(e.getStackTrace())));
+							}
+	
+							
+						}
+					}).start();
 				}
 				
 				if("mining.submit".equalsIgnoreCase(method)) {
 					if (currentCoin == null) throw new IOException("Forcing disconnect due to wrong internal state");					
-					((JSONArray)json.get("params")).set(0, currentCoin.login);
+					((JSONArray)json.get("params")).set(0, currentCoin.get().login);
 					line = json.toString();
 					
 					double diff = maxTarget.divide(new BigDecimal(new BigInteger(target.get(), 16)), 2, RoundingMode.HALF_UP).doubleValue();
@@ -398,20 +424,6 @@ public class Main {
 					logger.error("Somehow remotePw was not initialized and we're going to loose the message: " + line);
 				}
 								
-				{					
-					String newCoin = getCurrentCoin();
-					
-					if (!currentCoin.coinAbr.equalsIgnoreCase(newCoin)) {
-
-						remoteSocketPw.get().close();
-						
-						logger.info(String.format("Switching coins! %s to %s for %s", currentCoin.coinAbr, newCoin, rigLogin));
-						synchronized (Main.coins) {
-							currentCoin = minerCoins.get().get(newCoin);
-						}
-						remoteSocketPw.set( switchToCoin(currentCoin, pw, target) );
-					}
-				}
 						
 		}
 		} finally {
