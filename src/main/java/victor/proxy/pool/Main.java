@@ -272,17 +272,23 @@ public class Main {
 			minerCoins.put(entry.getKey(), entry.getValue().clone());
 		}
 		
-		Set<String> mainCoinAbrs = new HashSet<>();
+		Wrapper<Coin> currentCoin;	
+		
+		List<String> mainCoinAbrs = new ArrayList<>();
 		synchronized (Main.coins) {
 			for(CoinWithProfit pair : Main.coins.keySet()) {
 				mainCoinAbrs.add(pair.coinAbr);
 			}
 		}
 		minerCoins.keySet().retainAll(mainCoinAbrs);
+		mainCoinAbrs.retainAll(minerCoins.keySet());
+		currentCoin = new Wrapper<>(minerCoins.get(mainCoinAbrs.get(0)));
+
+		
 		String message = "Coins supported: " + minerCoins.keySet();
 		logger.debug(message);
 		
-		Wrapper<Coin> currentCoin = new Wrapper<>(minerCoins.values().iterator().next());		
+			
 
 		Socket socketRemote = new Socket(currentCoin.get().host, currentCoin.get().port);
 
@@ -381,12 +387,11 @@ public class Main {
 								String newCoin = getCurrentCoin(minerCoins);								
 								if (!currentCoin.get().coinAbr.equalsIgnoreCase(newCoin)) {
 									
-									remoteSocketPw.get().close();	
-									
 									logger.info(String.format("Switching coins! %s to %s for %s", currentCoin.get().coinAbr, newCoin, rigLoginFinal));
 									synchronized (Main.coins) {
 										currentCoin.set(minerCoins.get(newCoin));
 									}
+									remoteSocketPw.get().close();	
 									remoteSocketPw.set( switchToCoin(currentCoin.get(), pw, target) );
 								}
 							} catch (Exception e) {
@@ -561,7 +566,11 @@ public class Main {
 				exit();
 			}			
 		}).start();
-
+		while(Main.coins.isEmpty()) {
+			try {
+				Thread.sleep(100);
+			} catch (InterruptedException e) {}
+		}
 
 		handleConnections();
 
