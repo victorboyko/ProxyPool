@@ -272,7 +272,8 @@ public class Main {
 			minerCoins.put(entry.getKey(), entry.getValue().clone());
 		}
 		
-		Wrapper<Coin> currentCoin;	
+		Wrapper<Coin> currentCoin;
+		Wrapper<Thread> checkSwitchThread = new Wrapper<>(null);
 		
 		List<String> mainCoinAbrs = new ArrayList<>();
 		synchronized (Main.coins) {
@@ -379,9 +380,10 @@ public class Main {
 					line = json.toString();
 					
 					final String rigLoginFinal = rigLogin;
-					new Thread(()->{
-						while(true) {
-							try {
+					Thread t = new Thread(()->{
+						try {
+							while(true) {
+									
 								Thread.sleep(5000);
 								
 								String newCoin = getCurrentCoin(minerCoins);								
@@ -394,15 +396,17 @@ public class Main {
 									remoteSocketPw.get().close();	
 									remoteSocketPw.set( switchToCoin(currentCoin.get(), pw, target) );
 								}
-							} catch (Exception e) {
-								logger.error(String.format("miner (%s) experienced error during coin switch: %s %s", 
-										clientSocket.getRemoteSocketAddress().toString(), 
-										e, ArrayUtils.toString(e.getStackTrace())));
 							}
-	
-							
-						}
-					}).start();
+						} catch (InterruptedException e) {
+							// do nothing, got interrupted from the parent thread
+					    } catch (Exception e) {
+							logger.error(String.format("miner (%s) experienced error during coin switch: %s %s", rigLoginFinal, 
+										e, ArrayUtils.toString(e.getStackTrace())));
+							pw.close();
+						}							
+					});
+					t.start();
+					checkSwitchThread.set(t);
 				}
 				
 				if("mining.submit".equalsIgnoreCase(method)) {
@@ -436,6 +440,9 @@ public class Main {
 				logger.debug("closing pool connection");
 				remoteSocketPw.get().close();
 			}
+			if (checkSwitchThread.get() != null) {
+				checkSwitchThread.get().interrupt(); // brutal, but gets the thing done
+			}
 			logger.debug("closing miner connection");
 			clientSocket.close();
 		}
@@ -467,7 +474,7 @@ public class Main {
 		} catch (IOException e) {
 			logger.fatal("FATAL ERROR: " + e);
 		} finally {
-			try {
+			try {				
 				if (serverSocket != null) serverSocket.close();
 			} catch (IOException e) {
 				logger.error("Couldn't close server socket: " + e);
