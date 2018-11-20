@@ -6,6 +6,7 @@ Equihash stratum server that redirects hashing power to currenly most profitable
 - uses MineHub (https://github.com/victorboyko/MineHub) for profitability information
 - incoming hashing traffic (shares) statistics page
 - current profitability page
+- Zcash equihash protocol supported (not checked for other n,k equihash setup)
 
 - extranonce.subsribe enabled mode for miners that support it
 - NiceHash mode (no extranonce.subscribe) for taking hashing traffic from external sources (for ex. - NiceHash):
